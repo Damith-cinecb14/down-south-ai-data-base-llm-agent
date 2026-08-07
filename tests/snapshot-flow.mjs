@@ -48,6 +48,17 @@ assert.equal(chatResponse.status, 200);
 const chat = await chatResponse.json();
 assert.match(chat.result, /3 hospitals/i);
 
+const writeResponse = await worker.fetch(
+  new Request("http://localhost/api/hospitals", {
+    method: "PATCH",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ id: 1, address: "Test address" }),
+  }),
+  environment,
+  context,
+);
+assert.equal(writeResponse.status, 503);
+
 console.log(JSON.stringify({
   data: dataResponse.status,
   source: data.source,
@@ -56,4 +67,5 @@ console.log(JSON.stringify({
   services: data.services.length,
   agreements: data.agreements.length,
   assistant: chatResponse.status,
+  protectedWriteWithoutLiveBackend: writeResponse.status,
 }));

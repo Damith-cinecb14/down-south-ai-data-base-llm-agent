@@ -2,11 +2,12 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import type { AppUser } from "../auth";
-import type { DashboardData, ServiceAgreement } from "../types";
+import type { DashboardData, Hospital, ServiceAgreement } from "../types";
 
 type Section = "overview" | "hospitals" | "equipment" | "agreements" | "assistant";
 type ChatMessage = { role: "user" | "assistant"; content: string };
 type DataResult = { data: DashboardData; error?: never } | { data?: never; error: string };
+type HospitalDraft = { id?: number; name: string; address: string; email: string; telephone: string };
 
 const navigation: { id: Section; label: string; mark: string }[] = [
   { id: "overview", label: "Overview", mark: "01" },
@@ -52,6 +53,9 @@ export function DashboardClient({ user }: { user: AppUser }) {
   ]);
   const [threadId, setThreadId] = useState<string | null>(null);
   const [chatLoading, setChatLoading] = useState(false);
+  const [hospitalEditor, setHospitalEditor] = useState<HospitalDraft | null>(null);
+  const [hospitalSaving, setHospitalSaving] = useState(false);
+  const [hospitalFeedback, setHospitalFeedback] = useState("");
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -110,6 +114,46 @@ export function DashboardClient({ user }: { user: AppUser }) {
     }]);
     if (payload?.thread_id) setThreadId(payload.thread_id);
     setChatLoading(false);
+  }
+
+  function editHospital(hospital: Hospital) {
+    setHospitalFeedback("");
+    setHospitalEditor({
+      id: hospital.id,
+      name: hospital.name,
+      address: hospital.address ?? "",
+      email: hospital.email === "NA" ? "" : hospital.email ?? "",
+      telephone: hospital.telephone ?? "",
+    });
+  }
+
+  async function saveHospital(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!hospitalEditor || hospitalSaving) return;
+    const form = new FormData(event.currentTarget);
+    setHospitalSaving(true);
+    setHospitalFeedback("");
+    const response = await fetch("/api/hospitals", {
+      method: hospitalEditor.id ? "PATCH" : "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        id: hospitalEditor.id,
+        name: String(form.get("name") ?? ""),
+        address: String(form.get("address") ?? ""),
+        email: String(form.get("email") ?? ""),
+        telephone: String(form.get("telephone") ?? ""),
+      }),
+    });
+    const result = (await response.json().catch(() => null)) as { error?: string } | null;
+    if (!response.ok) {
+      setHospitalFeedback(result?.error ?? "Unable to save hospital details.");
+      setHospitalSaving(false);
+      return;
+    }
+    setHospitalEditor(null);
+    setHospitalFeedback(hospitalEditor.id ? "Hospital contact details updated." : "Hospital added to the database.");
+    setHospitalSaving(false);
+    await loadData();
   }
 
   async function logout() {
@@ -209,10 +253,38 @@ export function DashboardClient({ user }: { user: AppUser }) {
 
         {section === "hospitals" ? (
           <section className="section-view">
-            <div className="section-intro"><div><p className="eyebrow">Network directory</p><h2>Hospitals</h2></div><span>{data?.hospitals.length ?? 0} facilities</span></div>
+            <div className="section-intro">
+              <div><p className="eyebrow">Network directory</p><h2>Hospitals</h2></div>
+              <div className="section-actions">
+                <span>{data?.hospitals.length ?? 0} facilities</span>
+                <button
+                  className="add-record-button"
+                  disabled={!data?.connected}
+                  title={data?.connected ? "Add hospital" : "A live backend connection is required"}
+                  onClick={() => { setHospitalFeedback(""); setHospitalEditor({ name: "", address: "", email: "", telephone: "" }); }}
+                >+ Add hospital</button>
+              </div>
+            </div>
+            {!data?.connected ? <p className="write-mode-note">Adding and editing hospitals is available when the app is connected to the live FastAPI/PostgreSQL service.</p> : null}
+            {hospitalEditor ? (
+              <form className="hospital-form" onSubmit={saveHospital} key={hospitalEditor.id ?? "new"}>
+                <div className="hospital-form-heading">
+                  <div><p className="eyebrow">Database entry</p><h3>{hospitalEditor.id ? "Edit hospital contact details" : "Add a hospital"}</h3></div>
+                  <button type="button" onClick={() => setHospitalEditor(null)}>Cancel</button>
+                </div>
+                <div className="hospital-form-grid">
+                  <label>Hospital name<input name="name" defaultValue={hospitalEditor.name} minLength={3} required readOnly={Boolean(hospitalEditor.id)} /></label>
+                  <label>Address<input name="address" defaultValue={hospitalEditor.address} placeholder="Street, city or district" /></label>
+                  <label>Email<input name="email" type="email" defaultValue={hospitalEditor.email} placeholder="hospital@example.lk" /></label>
+                  <label>Telephone<input name="telephone" type="tel" defaultValue={hospitalEditor.telephone} placeholder="+94 XX XXX XXXX" /></label>
+                </div>
+                <div className="hospital-form-footer"><span>Saved directly to the downsouthregion hospitals table.</span><button className="save-record-button" type="submit" disabled={hospitalSaving}>{hospitalSaving ? "Saving…" : "Save hospital"}</button></div>
+              </form>
+            ) : null}
+            {hospitalFeedback ? <p className="form-feedback" role="status">{hospitalFeedback}</p> : null}
             <div className="data-table-wrap hospital-directory">
               <table className="data-table">
-                <thead><tr><th>Hospital name</th><th>Address</th><th>Email</th><th>Telephone</th><th>Equipment</th></tr></thead>
+                <thead><tr><th>Hospital name</th><th>Address</th><th>Email</th><th>Telephone</th><th>Equipment</th><th>Action</th></tr></thead>
                 <tbody>
                   {(data?.hospitals ?? []).map((hospital) => (
                     <tr key={hospital.id}>
@@ -221,6 +293,7 @@ export function DashboardClient({ user }: { user: AppUser }) {
                       <td>{hospital.email && hospital.email !== "NA" ? <a href={`mailto:${hospital.email}`}>{hospital.email}</a> : "Not recorded"}</td>
                       <td>{hospital.telephone ? <a href={`tel:${hospital.telephone.replace(/\s/g, "")}`}>{hospital.telephone}</a> : "Not recorded"}</td>
                       <td><span className="asset-count">{equipmentByHospital.get(hospital.id) ?? 0} assets</span></td>
+                      <td><button className="edit-record-button" disabled={!data?.connected} onClick={() => editHospital(hospital)}>Edit contact</button></td>
                     </tr>
                   ))}
                 </tbody>
