@@ -210,14 +210,21 @@ export function DashboardClient({ user }: { user: AppUser }) {
         {section === "hospitals" ? (
           <section className="section-view">
             <div className="section-intro"><div><p className="eyebrow">Network directory</p><h2>Hospitals</h2></div><span>{data?.hospitals.length ?? 0} facilities</span></div>
-            <div className="hospital-card-grid">
-              {(data?.hospitals ?? []).map((hospital, index) => (
-                <article className="hospital-card" key={hospital.id}>
-                  <div className="hospital-card-top"><span>0{index + 1}</span><i className="live-dot" /></div>
-                  <h3>{hospital.name}</h3><p>{hospital.address || "Contact details are awaiting confirmation."}</p>
-                  <dl><div><dt>Equipment</dt><dd>{equipmentByHospital.get(hospital.id) ?? 0}</dd></div><div><dt>Telephone</dt><dd>{hospital.telephone || "—"}</dd></div></dl>
-                </article>
-              ))}
+            <div className="data-table-wrap hospital-directory">
+              <table className="data-table">
+                <thead><tr><th>Hospital name</th><th>Address</th><th>Email</th><th>Telephone</th><th>Equipment</th></tr></thead>
+                <tbody>
+                  {(data?.hospitals ?? []).map((hospital) => (
+                    <tr key={hospital.id}>
+                      <td><strong>{hospital.name}</strong><small>Hospital ID {hospital.id}</small></td>
+                      <td>{hospital.address || "Not recorded"}</td>
+                      <td>{hospital.email && hospital.email !== "NA" ? <a href={`mailto:${hospital.email}`}>{hospital.email}</a> : "Not recorded"}</td>
+                      <td>{hospital.telephone ? <a href={`tel:${hospital.telephone.replace(/\s/g, "")}`}>{hospital.telephone}</a> : "Not recorded"}</td>
+                      <td><span className="asset-count">{equipmentByHospital.get(hospital.id) ?? 0} assets</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </section>
         ) : null}
