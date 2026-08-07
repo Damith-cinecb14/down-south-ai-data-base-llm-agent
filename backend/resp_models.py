@@ -42,6 +42,15 @@ class EquipmentBase(BaseModel):
 class EquipmentCreate(EquipmentBase):
     pass
 
+
+class EquipmentUpdate(BaseModel):
+    hospital_id: Optional[int] = None
+    name: Optional[str] = Field(None, min_length=2, max_length=255)
+    model: Optional[str] = None
+    serial_number: Optional[str] = None
+    manufacturer: Optional[str] = None
+    status: Optional[str] = None
+
 class EquipmentResponse(EquipmentBase):
     id:int
     created_at: Optional[datetime] = None

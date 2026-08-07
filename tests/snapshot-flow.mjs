@@ -59,6 +59,17 @@ const writeResponse = await worker.fetch(
 );
 assert.equal(writeResponse.status, 503);
 
+const equipmentWriteResponse = await worker.fetch(
+  new Request("http://localhost/api/equipment", {
+    method: "POST",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ hospital_id: 1, name: "Test equipment" }),
+  }),
+  environment,
+  context,
+);
+assert.equal(equipmentWriteResponse.status, 503);
+
 console.log(JSON.stringify({
   data: dataResponse.status,
   source: data.source,
@@ -68,4 +79,5 @@ console.log(JSON.stringify({
   agreements: data.agreements.length,
   assistant: chatResponse.status,
   protectedWriteWithoutLiveBackend: writeResponse.status,
+  protectedEquipmentWriteWithoutLiveBackend: equipmentWriteResponse.status,
 }));

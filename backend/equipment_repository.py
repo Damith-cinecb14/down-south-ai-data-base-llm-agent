@@ -3,7 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db_models import Equipment
-from resp_models import EquipmentCreate
+from resp_models import EquipmentCreate, EquipmentUpdate
 
 
 class EquipmentRepository:
@@ -30,6 +30,21 @@ class EquipmentRepository:
        await self.db.commit()
        await self.db.refresh(equipment)
        return equipment
+
+    async def get_by_id(self, equipment_id: int) -> Equipment | None:
+        result = await self.db.execute(select(Equipment).where(Equipment.id == equipment_id))
+        return result.scalars().first()
+
+    async def get_by_serial_number(self, serial_number: str) -> Equipment | None:
+        result = await self.db.execute(select(Equipment).where(Equipment.serial_number == serial_number))
+        return result.scalars().first()
+
+    async def update(self, equipment: Equipment, equipment_update: EquipmentUpdate) -> Equipment:
+        for field, value in equipment_update.model_dump(exclude_unset=True).items():
+            setattr(equipment, field, value)
+        await self.db.commit()
+        await self.db.refresh(equipment)
+        return equipment
 
     async def get_all(
             self,

@@ -2,12 +2,13 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import type { AppUser } from "../auth";
-import type { DashboardData, Hospital, ServiceAgreement } from "../types";
+import type { DashboardData, Equipment, Hospital, ServiceAgreement } from "../types";
 
 type Section = "overview" | "hospitals" | "equipment" | "agreements" | "assistant";
 type ChatMessage = { role: "user" | "assistant"; content: string };
 type DataResult = { data: DashboardData; error?: never } | { data?: never; error: string };
 type HospitalDraft = { id?: number; name: string; address: string; email: string; telephone: string };
+type EquipmentDraft = { id?: number; hospital_id: string; name: string; model: string; serial_number: string; status: string };
 
 const navigation: { id: Section; label: string; mark: string }[] = [
   { id: "overview", label: "Overview", mark: "01" },
@@ -16,6 +17,8 @@ const navigation: { id: Section; label: string; mark: string }[] = [
   { id: "agreements", label: "Agreements", mark: "04" },
   { id: "assistant", label: "AI Assistant", mark: "AI" },
 ];
+
+const equipmentStatuses = ["Operational", "Active", "Under service", "Out of service", "Retired"];
 
 function formatDate(value: string | null) {
   if (!value) return "Not recorded";
@@ -56,6 +59,9 @@ export function DashboardClient({ user }: { user: AppUser }) {
   const [hospitalEditor, setHospitalEditor] = useState<HospitalDraft | null>(null);
   const [hospitalSaving, setHospitalSaving] = useState(false);
   const [hospitalFeedback, setHospitalFeedback] = useState("");
+  const [equipmentEditor, setEquipmentEditor] = useState<EquipmentDraft | null>(null);
+  const [equipmentSaving, setEquipmentSaving] = useState(false);
+  const [equipmentFeedback, setEquipmentFeedback] = useState("");
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -153,6 +159,48 @@ export function DashboardClient({ user }: { user: AppUser }) {
     setHospitalEditor(null);
     setHospitalFeedback(hospitalEditor.id ? "Hospital contact details updated." : "Hospital added to the database.");
     setHospitalSaving(false);
+    await loadData();
+  }
+
+  function editEquipment(equipment: Equipment) {
+    setEquipmentFeedback("");
+    setEquipmentEditor({
+      id: equipment.id,
+      hospital_id: String(equipment.hospital_id),
+      name: equipment.name,
+      model: equipment.model ?? "",
+      serial_number: equipment.serial_number ?? "",
+      status: equipment.status ?? "",
+    });
+  }
+
+  async function saveEquipment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!equipmentEditor || equipmentSaving) return;
+    const form = new FormData(event.currentTarget);
+    setEquipmentSaving(true);
+    setEquipmentFeedback("");
+    const response = await fetch("/api/equipment", {
+      method: equipmentEditor.id ? "PATCH" : "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        id: equipmentEditor.id,
+        hospital_id: Number(form.get("hospital_id")),
+        name: String(form.get("name") ?? ""),
+        model: String(form.get("model") ?? ""),
+        serial_number: String(form.get("serial_number") ?? ""),
+        status: String(form.get("status") ?? ""),
+      }),
+    });
+    const result = (await response.json().catch(() => null)) as { error?: string } | null;
+    if (!response.ok) {
+      setEquipmentFeedback(result?.error ?? "Unable to save equipment details.");
+      setEquipmentSaving(false);
+      return;
+    }
+    setEquipmentEditor(null);
+    setEquipmentFeedback(equipmentEditor.id ? "Equipment details updated." : "Equipment added to the database.");
+    setEquipmentSaving(false);
     await loadData();
   }
 
@@ -304,9 +352,38 @@ export function DashboardClient({ user }: { user: AppUser }) {
 
         {section === "equipment" ? (
           <section className="section-view">
-            <div className="section-intro table-intro"><div><p className="eyebrow">Asset register</p><h2>Equipment</h2></div><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search equipment or hospital" aria-label="Search equipment" /></div>
-            <div className="data-table-wrap"><table className="data-table"><thead><tr><th>Equipment</th><th>Hospital</th><th>Model</th><th>Serial number</th><th>Status</th></tr></thead><tbody>
-              {filteredEquipment.map((item) => <tr key={item.id}><td><strong>{item.name}</strong></td><td>{data?.hospitals.find((entry) => entry.id === item.hospital_id)?.name ?? "Unknown"}</td><td>{item.model || "Not recorded"}</td><td>{item.serial_number || "—"}</td><td><span className="table-status">{item.status || "Awaiting data"}</span></td></tr>)}
+            <div className="section-intro table-intro">
+              <div><p className="eyebrow">Asset register</p><h2>Equipment</h2></div>
+              <div className="equipment-toolbar">
+                <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search equipment or hospital" aria-label="Search equipment" />
+                <button
+                  className="add-record-button"
+                  disabled={!data?.connected || !data.hospitals.length}
+                  title={data?.connected ? "Add equipment" : "A live backend connection is required"}
+                  onClick={() => { setEquipmentFeedback(""); setEquipmentEditor({ hospital_id: String(data?.hospitals[0]?.id ?? ""), name: "", model: "", serial_number: "", status: "Operational" }); }}
+                >+ Add equipment</button>
+              </div>
+            </div>
+            {!data?.connected ? <p className="write-mode-note">Adding and editing equipment is available when the app is connected to the live FastAPI/PostgreSQL service.</p> : null}
+            {equipmentEditor ? (
+              <form className="hospital-form" onSubmit={saveEquipment} key={equipmentEditor.id ?? "new-equipment"}>
+                <div className="hospital-form-heading">
+                  <div><p className="eyebrow">Database entry</p><h3>{equipmentEditor.id ? "Edit equipment details" : "Add equipment"}</h3></div>
+                  <button type="button" onClick={() => setEquipmentEditor(null)}>Cancel</button>
+                </div>
+                <div className="hospital-form-grid equipment-form-grid">
+                  <label>Equipment name<input name="name" defaultValue={equipmentEditor.name} minLength={2} required /></label>
+                  <label>Hospital<select name="hospital_id" defaultValue={equipmentEditor.hospital_id} required>{(data?.hospitals ?? []).map((hospital) => <option value={hospital.id} key={hospital.id}>{hospital.name}</option>)}</select></label>
+                  <label>Model<input name="model" defaultValue={equipmentEditor.model} placeholder="Model name or number" /></label>
+                  <label>Serial number<input name="serial_number" defaultValue={equipmentEditor.serial_number} placeholder="Unique serial number" /></label>
+                  <label>Status<select name="status" defaultValue={equipmentEditor.status}>{equipmentEditor.status && !equipmentStatuses.includes(equipmentEditor.status) ? <option value={equipmentEditor.status}>{equipmentEditor.status}</option> : null}<option value="">Not recorded</option>{equipmentStatuses.map((status) => <option value={status} key={status}>{status}</option>)}</select></label>
+                </div>
+                <div className="hospital-form-footer"><span>Saved directly to the downsouthregion equipment table.</span><button className="save-record-button" type="submit" disabled={equipmentSaving}>{equipmentSaving ? "Saving…" : "Save equipment"}</button></div>
+              </form>
+            ) : null}
+            {equipmentFeedback ? <p className="form-feedback" role="status">{equipmentFeedback}</p> : null}
+            <div className="data-table-wrap equipment-directory"><table className="data-table"><thead><tr><th>Equipment</th><th>Hospital</th><th>Model</th><th>Serial number</th><th>Status</th><th>Action</th></tr></thead><tbody>
+              {filteredEquipment.map((item) => <tr key={item.id}><td><strong>{item.name}</strong><small>Equipment ID {item.id}</small></td><td>{data?.hospitals.find((entry) => entry.id === item.hospital_id)?.name ?? "Unknown"}</td><td>{item.model || "Not recorded"}</td><td>{item.serial_number || "—"}</td><td><span className="table-status">{item.status || "Awaiting data"}</span></td><td><button className="edit-record-button" disabled={!data?.connected} onClick={() => editEquipment(item)}>Edit</button></td></tr>)}
             </tbody></table></div>
           </section>
         ) : null}
