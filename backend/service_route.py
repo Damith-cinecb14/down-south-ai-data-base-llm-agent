@@ -1,0 +1,41 @@
+from typing import List
+
+from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from starlette import status
+from starlette.exceptions import HTTPException
+
+from database_config import get_db
+from service_repository import ServiceRepository
+from resp_models import ServiceCreate, ServiceResponse
+
+router = APIRouter(prefix="/services", tags=["Services"])
+
+
+@router.get("/", response_model=List[ServiceResponse])
+async def get_services(
+        skip: int = 0,
+        limit: int = 100,
+        equipment_id: int | None = None,
+        db: AsyncSession = Depends(get_db)
+):
+    repo = ServiceRepository(db)
+    return await repo.get_all(skip=skip, limit=min(limit, 500), equipment_id=equipment_id)
+
+@router.post("/", response_model=ServiceResponse,status_code=status.HTTP_201_CREATED)
+async  def create_service(
+        service_data:ServiceCreate,
+        db: AsyncSession = Depends(get_db)
+
+):
+
+    repo = ServiceRepository(db)
+
+    try:
+        service = await repo.create(service_data)
+        return service
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f" An Error occurred -{str(e)} "
+        )
