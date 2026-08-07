@@ -41,6 +41,8 @@ export type ServiceAgreement = {
 
 export type DashboardData = {
   connected: boolean;
+  source?: "live" | "snapshot";
+  warning?: string;
   hospitals: Hospital[];
   equipment: Equipment[];
   services: Service[];

@@ -162,11 +162,18 @@ export function DashboardClient({ user }: { user: AppUser }) {
           </div>
         ) : null}
 
+        {!error && data?.source === "snapshot" ? (
+          <div className="snapshot-notice" role="status">
+            <span>Verified snapshot</span>
+            <p>{data.warning}</p>
+          </div>
+        ) : null}
+
         {section === "overview" ? (
           <div className="content-stack">
             <section className="welcome-band">
               <div><p>Good day, {user.displayName.split(" ")[0]}.</p><h2>Regional service operations at a glance.</h2></div>
-              <span className={data?.connected ? "live-pill" : "live-pill offline"}><i />{data?.connected ? "Live database" : "Connecting"}</span>
+              <span className={data?.connected ? "live-pill" : "live-pill offline"}><i />{data?.connected ? "Live database" : data ? "Verified snapshot" : "Connecting"}</span>
             </section>
             <section className="metric-grid" aria-label="Key metrics">
               <article><span>Hospitals</span><strong>{data?.hospitals.length ?? "—"}</strong><small>Southern network</small></article>
