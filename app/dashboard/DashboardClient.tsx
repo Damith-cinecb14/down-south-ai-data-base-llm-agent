@@ -4,18 +4,22 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import type { AppUser } from "../auth";
 import type { DashboardData, Equipment, Hospital, ServiceAgreement } from "../types";
 
-type Section = "overview" | "hospitals" | "equipment" | "agreements" | "assistant";
+type Section = "overview" | "hospitals" | "equipment" | "agreements" | "service-quarters" | "assistant";
 type ChatMessage = { role: "user" | "assistant"; content: string };
 type DataResult = { data: DashboardData; error?: never } | { data?: never; error: string };
 type HospitalDraft = { id?: number; name: string; address: string; email: string; telephone: string };
 type EquipmentDraft = { id?: number; hospital_id: string; name: string; model: string; serial_number: string; status: string };
 type AgreementDraft = { id: number; hospital_name: string; equipment_name: string; agreement_start_date: string; agreement_end_date: string };
+type QuarterState = "Completed" | "Late" | "Due" | "Upcoming" | "Overdue" | "Outside coverage";
+type QuarterPlan = { quarter: number; targetDate: string; actualDate: string | null; intervalDays: number | null; state: QuarterState };
+type ServiceQuarterRow = { equipment: Equipment; hospitalName: string; agreement: ServiceAgreement | null; quarters: QuarterPlan[] };
 
 const navigation: { id: Section; label: string; mark: string }[] = [
   { id: "overview", label: "Overview", mark: "01" },
   { id: "hospitals", label: "Hospitals", mark: "02" },
   { id: "equipment", label: "Equipment", mark: "03" },
   { id: "agreements", label: "Agreements", mark: "04" },
+  { id: "service-quarters", label: "Service Quarters", mark: "05" },
   { id: "assistant", label: "AI Assistant", mark: "AI" },
 ];
 
@@ -38,10 +42,12 @@ function agreementState(agreement: ServiceAgreement) {
 }
 
 function normalizedAssetName(value: string | null) {
-  return (value ?? "")
+  const normalizedName = (value ?? "")
     .toLowerCase()
     .replace(/[^a-z0-9]/g, "")
     .replace(/([a-z])\1+/g, "$1");
+  if (["mux8", "digitalmobilexray"].includes(normalizedName)) return "mobiledart";
+  return normalizedName;
 }
 
 function assetNamesMatch(left: string | null, right: string | null) {
@@ -51,6 +57,58 @@ function assetNamesMatch(left: string | null, right: string | null) {
   return normalizedLeft === normalizedRight
     || normalizedLeft.includes(normalizedRight)
     || normalizedRight.includes(normalizedLeft);
+}
+
+const serviceMonthNumbers: Record<string, number> = {
+  january: 1, jan: 1,
+  february: 2, feb: 2,
+  march: 3, mar: 3,
+  april: 4, apr: 4,
+  may: 5,
+  june: 6, jun: 6,
+  july: 7, jul: 7,
+  august: 8, aug: 8,
+  september: 9, sep: 9, sept: 9,
+  october: 10, oct: 10,
+  november: 11, nov: 11,
+  december: 12, dec: 12,
+};
+
+function toIsoDate(year: number, month: number, day: number) {
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
+  return date.toISOString().slice(0, 10);
+}
+
+function normalizedServiceDate(value: string | null) {
+  if (!value) return null;
+  const trimmed = value.trim().toLowerCase();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+
+  const compact = trimmed.replace(/[^a-z0-9]/g, "");
+  const match = compact.match(/^(\d{1,2})([a-z]+)(\d{4})$/);
+  if (!match) return null;
+  const month = serviceMonthNumbers[match[2]];
+  return month ? toIsoDate(Number(match[3]), month, Number(match[1])) : null;
+}
+
+function addCalendarMonths(value: string, months: number) {
+  const [year, month, day] = value.split("-").map(Number);
+  const firstOfTarget = new Date(Date.UTC(year, month - 1 + months, 1));
+  const targetYear = firstOfTarget.getUTCFullYear();
+  const targetMonth = firstOfTarget.getUTCMonth() + 1;
+  const lastDay = new Date(Date.UTC(targetYear, targetMonth, 0)).getUTCDate();
+  return toIsoDate(targetYear, targetMonth, Math.min(day, lastDay)) ?? value;
+}
+
+function addDays(value: string, days: number) {
+  const date = new Date(`${value}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function daysBetween(start: string, end: string) {
+  return Math.round((new Date(`${end}T00:00:00Z`).getTime() - new Date(`${start}T00:00:00Z`).getTime()) / 86400000);
 }
 
 async function fetchDashboardData(): Promise<DataResult> {
@@ -135,6 +193,53 @@ export function DashboardClient({ user }: { user: AppUser }) {
     return latestAgreements;
   }, [data]);
 
+  const serviceQuarterRows = useMemo<ServiceQuarterRow[]>(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    const hospitalNames = new Map((data?.hospitals ?? []).map((hospital) => [hospital.id, hospital.name]));
+
+    return (data?.equipment ?? []).map((equipment) => {
+      const agreement = latestAgreementByEquipment.get(equipment.id) ?? null;
+      const coverageStart = agreement?.agreement_start_date;
+      const coverageEnd = agreement?.agreement_end_date;
+      if (!coverageStart || !coverageEnd) {
+        return { equipment, hospitalName: hospitalNames.get(equipment.hospital_id) ?? "Unknown", agreement, quarters: [] };
+      }
+
+      const actualDates = (data?.services ?? [])
+        .filter((service) => service.equipment_id === equipment.id)
+        .map((service) => normalizedServiceDate(service.service_date))
+        .filter((date): date is string => Boolean(date) && date >= coverageStart && date <= coverageEnd)
+        .sort()
+        .slice(0, 4);
+
+      const quarters: QuarterPlan[] = [0, 1, 2, 3].map((quarterIndex) => {
+        const targetDate = addCalendarMonths(coverageStart, quarterIndex * 3);
+        const actualDate = actualDates[quarterIndex] ?? null;
+        const previousReference = quarterIndex === 0
+          ? coverageStart
+          : actualDates[quarterIndex - 1] ?? addCalendarMonths(coverageStart, (quarterIndex - 1) * 3);
+        const intervalDays = actualDate ? daysBetween(previousReference, actualDate) : null;
+        const deadline = addDays(previousReference, 120);
+        let state: QuarterState;
+
+        if (targetDate > coverageEnd) state = "Outside coverage";
+        else if (actualDate) state = intervalDays !== null && intervalDays > 120 ? "Late" : "Completed";
+        else if (today > deadline || today > coverageEnd) state = "Overdue";
+        else if (today >= targetDate) state = "Due";
+        else state = "Upcoming";
+
+        return { quarter: quarterIndex + 1, targetDate, actualDate, intervalDays, state };
+      });
+
+      return {
+        equipment,
+        hospitalName: hospitalNames.get(equipment.hospital_id) ?? "Unknown",
+        agreement,
+        quarters,
+      };
+    });
+  }, [data, latestAgreementByEquipment]);
+
   const activeAgreements = data?.agreements.filter((agreement) => ["Active", "Expiring"].includes(agreementState(agreement))).length ?? 0;
   const expiringAgreements = data?.agreements.filter((agreement) => agreementState(agreement) === "Expiring").length ?? 0;
   const query = search.trim().toLowerCase();
@@ -144,6 +249,9 @@ export function DashboardClient({ user }: { user: AppUser }) {
   });
   const filteredAgreements = (data?.agreements ?? []).filter((item) =>
     `${item.hospital_name} ${item.equipment_name} ${item.contract_number ?? ""}`.toLowerCase().includes(query),
+  );
+  const filteredServiceQuarterRows = serviceQuarterRows.filter((row) =>
+    `${row.equipment.name} ${row.equipment.model ?? ""} ${row.equipment.serial_number ?? ""} ${row.hospitalName}`.toLowerCase().includes(query),
   );
 
   async function sendMessage(event: FormEvent<HTMLFormElement>) {
@@ -555,6 +663,54 @@ export function DashboardClient({ user }: { user: AppUser }) {
             <div className="data-table-wrap"><table className="data-table"><thead><tr><th>Equipment</th><th>Hospital</th><th>Contract</th><th>Coverage period</th><th>State</th><th>Action</th></tr></thead><tbody>
               {filteredAgreements.map((item) => { const state = agreementState(item); return <tr key={item.id}><td><strong>{item.equipment_name}</strong><small>Installed {formatDate(item.installation_date)}</small></td><td>{item.hospital_name}</td><td>{item.contract_number || "—"}</td><td>{formatDate(item.agreement_start_date)}<small>to {formatDate(item.agreement_end_date)}</small></td><td><span className={`agreement-state ${state.toLowerCase()}`}>{state}</span></td><td><button className="edit-record-button" disabled={!data?.connected || agreementSaving} onClick={() => editAgreementCoverage(item)}>Edit coverage</button></td></tr>; })}
             </tbody></table></div>
+          </section>
+        ) : null}
+
+        {section === "service-quarters" ? (
+          <section className="section-view">
+            <div className="section-intro table-intro">
+              <div><p className="eyebrow">Preventive service plan</p><h2>Four-quarter service schedule</h2></div>
+              <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search equipment or hospital" aria-label="Search service quarter schedule" />
+            </div>
+            <div className="quarter-guideline" role="note">
+              <strong>Service guideline</strong>
+              <span>Four services per coverage period. Planned dates are three calendar months apart, and the interval between completed services must not exceed 120 days.</span>
+            </div>
+            <div className="data-table-wrap quarter-directory">
+              <table className="data-table">
+                <thead><tr><th>Equipment</th><th>Serial number</th><th>Hospital</th><th>Coverage period</th><th>Quarter 1</th><th>Quarter 2</th><th>Quarter 3</th><th>Quarter 4</th><th>Compliance</th></tr></thead>
+                <tbody>
+                  {filteredServiceQuarterRows.map((row) => {
+                    const completedCount = row.quarters.filter((quarter) => quarter.state === "Completed").length;
+                    const needsAttention = row.quarters.some((quarter) => ["Late", "Overdue", "Outside coverage"].includes(quarter.state));
+                    return (
+                      <tr key={row.equipment.id}>
+                        <td><strong>{row.equipment.name}</strong><small>{row.equipment.model || "Model not recorded"} · ID {row.equipment.id}</small></td>
+                        <td className="serial-number-cell">{row.equipment.serial_number || "Not recorded"}</td>
+                        <td>{row.hospitalName}</td>
+                        <td className="coverage-cell">
+                          {row.agreement?.agreement_start_date && row.agreement.agreement_end_date
+                            ? <>{formatDate(row.agreement.agreement_start_date)}<small>to {formatDate(row.agreement.agreement_end_date)}</small></>
+                            : <>Not recorded<small>Agreement required</small></>}
+                        </td>
+                        {[1, 2, 3, 4].map((quarterNumber) => {
+                          const quarter = row.quarters[quarterNumber - 1];
+                          return (
+                            <td className="quarter-cell" key={quarterNumber}>
+                              {quarter ? <><strong>{formatDate(quarter.targetDate)}</strong><small>{quarter.actualDate ? `Serviced ${formatDate(quarter.actualDate)}` : "No service recorded"}</small><span className={`quarter-status ${quarter.state.toLowerCase().replace(/\s+/g, "-")}`}>{quarter.state}</span></> : <><strong>Not scheduled</strong><small>Coverage dates required</small></>}
+                            </td>
+                          );
+                        })}
+                        <td className="compliance-cell">
+                          <span className={!row.quarters.length || needsAttention ? "compliance-badge attention" : "compliance-badge"}>{row.quarters.length ? `${completedCount}/4 completed` : "Missing coverage"}</span>
+                          <small>{row.quarters.length ? "Maximum 120-day interval" : "Add an agreement period"}</small>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </section>
         ) : null}
 

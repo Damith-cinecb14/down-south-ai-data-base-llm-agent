@@ -1,4 +1,4 @@
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db_models import Equipment, Hospital, ServiceAgreement
@@ -12,7 +12,14 @@ def normalized_asset_name(column):
         "",
         "g",
     )
-    return func.regexp_replace(compact_name, r"(.)\1+", r"\1", "g")
+    collapsed_name = func.regexp_replace(compact_name, r"(.)\1+", r"\1", "g")
+    return case(
+        (
+            collapsed_name.in_(("mux8", "digitalmobilexray")),
+            "mobiledart",
+        ),
+        else_=collapsed_name,
+    )
 
 
 class ServiceAgreementRepository:
