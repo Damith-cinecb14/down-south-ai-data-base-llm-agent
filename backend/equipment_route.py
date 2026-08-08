@@ -1,6 +1,7 @@
 from typing import List
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette import status
 from starlette.exceptions import HTTPException
@@ -9,6 +10,7 @@ from database_config import get_db
 from equipment_repository import EquipmentRepository
 from hospital_repository import HospitalRepository
 from resp_models import EquipmentCreate, EquipmentResponse, EquipmentUpdate
+from service_repository import ServiceRepository
 
 router = APIRouter(prefix="/equipments", tags=["Equipments"])
 
@@ -62,3 +64,30 @@ async def update_equipment(
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Equipment already exists with this serial number")
 
     return await repo.update(equipment, equipment_data)
+
+
+@router.delete("/{equipment_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_equipment(
+        equipment_id: int,
+        db: AsyncSession = Depends(get_db)
+):
+    repo = EquipmentRepository(db)
+    equipment = await repo.get_by_id(equipment_id)
+    if not equipment:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Equipment not found")
+
+    if await ServiceRepository(db).has_for_equipment(equipment_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Equipment with service history cannot be removed. Keep it for audit history or remove its service records first.",
+        )
+
+    try:
+        await repo.delete(equipment)
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Equipment is referenced by another database record and cannot be removed.",
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

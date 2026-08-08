@@ -75,3 +75,36 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   return proxyEquipment(request, "PATCH");
 }
+
+export async function DELETE(request: Request) {
+  const user = await getAppUser();
+  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+
+  const backend = configuredBackendBase();
+  if (!backend) {
+    return Response.json(
+      { error: "Equipment removal requires a live FastAPI backend connection." },
+      { status: 503 },
+    );
+  }
+
+  const payload = (await request.json().catch(() => null)) as EquipmentPayload | null;
+  if (!payload?.id || !Number.isInteger(payload.id)) {
+    return Response.json({ error: "A valid equipment ID is required." }, { status: 400 });
+  }
+
+  try {
+    const backendResponse = await fetch(new URL(`equipments/${payload.id}`, backend), {
+      method: "DELETE",
+    });
+    if (backendResponse.status === 204) return new Response(null, { status: 204 });
+
+    const result = (await backendResponse.json().catch(() => null)) as { detail?: string } | null;
+    return Response.json(
+      { error: result?.detail ?? "Unable to remove equipment." },
+      { status: backendResponse.status },
+    );
+  } catch {
+    return Response.json({ error: "The live equipment database is unavailable." }, { status: 503 });
+  }
+}

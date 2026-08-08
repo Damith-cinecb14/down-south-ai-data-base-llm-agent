@@ -9,6 +9,7 @@ type ChatMessage = { role: "user" | "assistant"; content: string };
 type DataResult = { data: DashboardData; error?: never } | { data?: never; error: string };
 type HospitalDraft = { id?: number; name: string; address: string; email: string; telephone: string };
 type EquipmentDraft = { id?: number; hospital_id: string; name: string; model: string; serial_number: string; status: string };
+type AgreementDraft = { id: number; hospital_name: string; equipment_name: string; agreement_start_date: string; agreement_end_date: string };
 
 const navigation: { id: Section; label: string; mark: string }[] = [
   { id: "overview", label: "Overview", mark: "01" },
@@ -36,6 +37,22 @@ function agreementState(agreement: ServiceAgreement) {
   return days <= 60 ? "Expiring" : "Active";
 }
 
+function normalizedAssetName(value: string | null) {
+  return (value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "")
+    .replace(/([a-z])\1+/g, "$1");
+}
+
+function assetNamesMatch(left: string | null, right: string | null) {
+  const normalizedLeft = normalizedAssetName(left);
+  const normalizedRight = normalizedAssetName(right);
+  if (!normalizedLeft || !normalizedRight) return false;
+  return normalizedLeft === normalizedRight
+    || normalizedLeft.includes(normalizedRight)
+    || normalizedRight.includes(normalizedLeft);
+}
+
 async function fetchDashboardData(): Promise<DataResult> {
   const response = await fetch("/api/data", { cache: "no-store" });
   if (!response.ok) {
@@ -61,7 +78,11 @@ export function DashboardClient({ user }: { user: AppUser }) {
   const [hospitalFeedback, setHospitalFeedback] = useState("");
   const [equipmentEditor, setEquipmentEditor] = useState<EquipmentDraft | null>(null);
   const [equipmentSaving, setEquipmentSaving] = useState(false);
+  const [equipmentDeletingId, setEquipmentDeletingId] = useState<number | null>(null);
   const [equipmentFeedback, setEquipmentFeedback] = useState("");
+  const [agreementEditor, setAgreementEditor] = useState<AgreementDraft | null>(null);
+  const [agreementSaving, setAgreementSaving] = useState(false);
+  const [agreementFeedback, setAgreementFeedback] = useState("");
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -87,6 +108,31 @@ export function DashboardClient({ user }: { user: AppUser }) {
     const counts = new Map<number, number>();
     for (const item of data?.equipment ?? []) counts.set(item.hospital_id, (counts.get(item.hospital_id) ?? 0) + 1);
     return counts;
+  }, [data]);
+
+  const latestAgreementByEquipment = useMemo(() => {
+    const latestAgreements = new Map<number, ServiceAgreement>();
+    const hospitalNames = new Map(
+      (data?.hospitals ?? []).map((hospital) => [hospital.id, hospital.name.trim().toLowerCase()]),
+    );
+
+    for (const equipment of data?.equipment ?? []) {
+      const hospitalName = hospitalNames.get(equipment.hospital_id);
+      if (!hospitalName) continue;
+
+      for (const agreement of data?.agreements ?? []) {
+        if (agreement.hospital_name.trim().toLowerCase() !== hospitalName) continue;
+        if (!assetNamesMatch(equipment.model, agreement.equipment_name)
+            && !assetNamesMatch(equipment.name, agreement.equipment_name)) continue;
+
+        const current = latestAgreements.get(equipment.id);
+        const agreementDate = agreement.agreement_end_date ?? agreement.agreement_start_date ?? "";
+        const currentDate = current?.agreement_end_date ?? current?.agreement_start_date ?? "";
+        if (!current || agreementDate > currentDate) latestAgreements.set(equipment.id, agreement);
+      }
+    }
+
+    return latestAgreements;
   }, [data]);
 
   const activeAgreements = data?.agreements.filter((agreement) => ["Active", "Expiring"].includes(agreementState(agreement))).length ?? 0;
@@ -202,6 +248,89 @@ export function DashboardClient({ user }: { user: AppUser }) {
     setEquipmentFeedback(equipmentEditor.id ? "Equipment details updated." : "Equipment added to the database.");
     setEquipmentSaving(false);
     await loadData();
+  }
+
+  async function deleteEquipment(equipment: Equipment) {
+    if (equipmentDeletingId !== null) return;
+    if (!window.confirm(`Remove ${equipment.name} from the equipment register? This cannot be undone.`)) return;
+
+    setEquipmentDeletingId(equipment.id);
+    setEquipmentFeedback("");
+    try {
+      const response = await fetch("/api/equipment", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: equipment.id }),
+      });
+      const result = response.status === 204
+        ? null
+        : await response.json().catch(() => null) as { error?: string } | null;
+      if (!response.ok) {
+        setEquipmentFeedback(result?.error ?? "Unable to remove equipment.");
+        return;
+      }
+      if (equipmentEditor?.id === equipment.id) setEquipmentEditor(null);
+      setEquipmentFeedback(`${equipment.name} removed from the equipment register.`);
+      await loadData();
+    } catch {
+      setEquipmentFeedback("Unable to reach the equipment service.");
+    } finally {
+      setEquipmentDeletingId(null);
+    }
+  }
+
+  function editAgreementCoverage(agreement: ServiceAgreement) {
+    setAgreementFeedback("");
+    setAgreementEditor({
+      id: agreement.id,
+      hospital_name: agreement.hospital_name,
+      equipment_name: agreement.equipment_name,
+      agreement_start_date: agreement.agreement_start_date ?? "",
+      agreement_end_date: agreement.agreement_end_date ?? "",
+    });
+  }
+
+  async function saveAgreementCoverage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!agreementEditor || agreementSaving) return;
+
+    const form = new FormData(event.currentTarget);
+    const startDate = String(form.get("agreement_start_date") ?? "");
+    const endDate = String(form.get("agreement_end_date") ?? "");
+    if (Boolean(startDate) !== Boolean(endDate)) {
+      setAgreementFeedback("Enter both coverage dates or clear both dates.");
+      return;
+    }
+    if (startDate && endDate && endDate < startDate) {
+      setAgreementFeedback("Coverage end date cannot be before the start date.");
+      return;
+    }
+
+    setAgreementSaving(true);
+    setAgreementFeedback("");
+    try {
+      const response = await fetch("/api/agreements", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          id: agreementEditor.id,
+          agreement_start_date: startDate || null,
+          agreement_end_date: endDate || null,
+        }),
+      });
+      const result = (await response.json().catch(() => null)) as { error?: string } | null;
+      if (!response.ok) {
+        setAgreementFeedback(result?.error ?? "Unable to update the coverage period.");
+        return;
+      }
+      setAgreementEditor(null);
+      setAgreementFeedback("Coverage period updated in the service agreements table.");
+      await loadData();
+    } catch {
+      setAgreementFeedback("Unable to reach the service-agreement database.");
+    } finally {
+      setAgreementSaving(false);
+    }
   }
 
   async function logout() {
@@ -364,7 +493,7 @@ export function DashboardClient({ user }: { user: AppUser }) {
                 >+ Add equipment</button>
               </div>
             </div>
-            {!data?.connected ? <p className="write-mode-note">Adding and editing equipment is available when the app is connected to the live FastAPI/PostgreSQL service.</p> : null}
+            {!data?.connected ? <p className="write-mode-note">Adding, editing, and removing equipment is available when the app is connected to the live FastAPI/PostgreSQL service.</p> : null}
             {equipmentEditor ? (
               <form className="hospital-form" onSubmit={saveEquipment} key={equipmentEditor.id ?? "new-equipment"}>
                 <div className="hospital-form-heading">
@@ -382,8 +511,23 @@ export function DashboardClient({ user }: { user: AppUser }) {
               </form>
             ) : null}
             {equipmentFeedback ? <p className="form-feedback" role="status">{equipmentFeedback}</p> : null}
-            <div className="data-table-wrap equipment-directory"><table className="data-table"><thead><tr><th>Equipment</th><th>Hospital</th><th>Model</th><th>Serial number</th><th>Status</th><th>Action</th></tr></thead><tbody>
-              {filteredEquipment.map((item) => <tr key={item.id}><td><strong>{item.name}</strong><small>Equipment ID {item.id}</small></td><td>{data?.hospitals.find((entry) => entry.id === item.hospital_id)?.name ?? "Unknown"}</td><td>{item.model || "Not recorded"}</td><td>{item.serial_number || "—"}</td><td><span className="table-status">{item.status || "Awaiting data"}</span></td><td><button className="edit-record-button" disabled={!data?.connected} onClick={() => editEquipment(item)}>Edit</button></td></tr>)}
+            <div className="data-table-wrap equipment-directory"><table className="data-table"><thead><tr><th>Equipment</th><th>Hospital</th><th>Model</th><th>Serial number</th><th>Status</th><th>Coverage period</th><th>Action</th></tr></thead><tbody>
+              {filteredEquipment.map((item) => {
+                const coverage = latestAgreementByEquipment.get(item.id);
+                return (
+                  <tr key={item.id}>
+                    <td><strong>{item.name}</strong><small>Equipment ID {item.id}</small></td>
+                    <td>{data?.hospitals.find((entry) => entry.id === item.hospital_id)?.name ?? "Unknown"}</td>
+                    <td>{item.model || "Not recorded"}</td>
+                    <td>{item.serial_number || "—"}</td>
+                    <td><span className="table-status">{item.status || "Awaiting data"}</span></td>
+                    <td className="coverage-cell">
+                      {coverage ? <>{formatDate(coverage.agreement_start_date)}<small>to {formatDate(coverage.agreement_end_date)} · {agreementState(coverage)}</small></> : <>Not recorded<small>No matching agreement</small></>}
+                    </td>
+                    <td><div className="record-actions"><button className="edit-record-button" disabled={!data?.connected || equipmentDeletingId !== null} onClick={() => editEquipment(item)}>Edit</button><button className="delete-record-button" disabled={!data?.connected || equipmentDeletingId !== null} onClick={() => void deleteEquipment(item)}>{equipmentDeletingId === item.id ? "Removing…" : "Remove"}</button></div></td>
+                  </tr>
+                );
+              })}
             </tbody></table></div>
           </section>
         ) : null}
@@ -391,8 +535,25 @@ export function DashboardClient({ user }: { user: AppUser }) {
         {section === "agreements" ? (
           <section className="section-view">
             <div className="section-intro table-intro"><div><p className="eyebrow">Contract coverage</p><h2>Service agreements</h2></div><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search contract, equipment, hospital" aria-label="Search agreements" /></div>
-            <div className="data-table-wrap"><table className="data-table"><thead><tr><th>Equipment</th><th>Hospital</th><th>Contract</th><th>Coverage period</th><th>State</th></tr></thead><tbody>
-              {filteredAgreements.map((item) => { const state = agreementState(item); return <tr key={item.id}><td><strong>{item.equipment_name}</strong><small>Installed {formatDate(item.installation_date)}</small></td><td>{item.hospital_name}</td><td>{item.contract_number || "—"}</td><td>{formatDate(item.agreement_start_date)}<small>to {formatDate(item.agreement_end_date)}</small></td><td><span className={`agreement-state ${state.toLowerCase()}`}>{state}</span></td></tr>; })}
+            {!data?.connected ? <p className="write-mode-note">Coverage periods can be changed when the app is connected to the live FastAPI/PostgreSQL service.</p> : null}
+            {agreementEditor ? (
+              <form className="hospital-form" onSubmit={saveAgreementCoverage} key={agreementEditor.id}>
+                <div className="hospital-form-heading">
+                  <div><p className="eyebrow">Contract coverage</p><h3>Edit coverage period</h3></div>
+                  <button type="button" onClick={() => setAgreementEditor(null)}>Cancel</button>
+                </div>
+                <div className="hospital-form-grid agreement-form-grid">
+                  <label>Equipment<input value={agreementEditor.equipment_name} readOnly /></label>
+                  <label>Hospital<input value={agreementEditor.hospital_name} readOnly /></label>
+                  <label>Coverage start<input name="agreement_start_date" type="date" defaultValue={agreementEditor.agreement_start_date} /></label>
+                  <label>Coverage end<input name="agreement_end_date" type="date" defaultValue={agreementEditor.agreement_end_date} /></label>
+                </div>
+                <div className="hospital-form-footer"><span>Saved directly to the downsouthregion service_agreements table.</span><button className="save-record-button" type="submit" disabled={agreementSaving}>{agreementSaving ? "Saving…" : "Save coverage"}</button></div>
+              </form>
+            ) : null}
+            {agreementFeedback ? <p className="form-feedback" role="status">{agreementFeedback}</p> : null}
+            <div className="data-table-wrap"><table className="data-table"><thead><tr><th>Equipment</th><th>Hospital</th><th>Contract</th><th>Coverage period</th><th>State</th><th>Action</th></tr></thead><tbody>
+              {filteredAgreements.map((item) => { const state = agreementState(item); return <tr key={item.id}><td><strong>{item.equipment_name}</strong><small>Installed {formatDate(item.installation_date)}</small></td><td>{item.hospital_name}</td><td>{item.contract_number || "—"}</td><td>{formatDate(item.agreement_start_date)}<small>to {formatDate(item.agreement_end_date)}</small></td><td><span className={`agreement-state ${state.toLowerCase()}`}>{state}</span></td><td><button className="edit-record-button" disabled={!data?.connected || agreementSaving} onClick={() => editAgreementCoverage(item)}>Edit coverage</button></td></tr>; })}
             </tbody></table></div>
           </section>
         ) : null}

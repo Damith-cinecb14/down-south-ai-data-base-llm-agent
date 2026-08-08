@@ -46,6 +46,10 @@ class EquipmentRepository:
         await self.db.refresh(equipment)
         return equipment
 
+    async def delete(self, equipment: Equipment) -> None:
+        await self.db.delete(equipment)
+        await self.db.commit()
+
     async def get_all(
             self,
             skip: int = 0,

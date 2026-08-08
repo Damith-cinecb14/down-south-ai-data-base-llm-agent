@@ -47,6 +47,21 @@ const chatResponse = await worker.fetch(
 assert.equal(chatResponse.status, 200);
 const chat = await chatResponse.json();
 assert.match(chat.result, /3 hospitals/i);
+assert.match(chat.result, /address:/i);
+
+const equipmentChatResponse = await worker.fetch(
+  new Request("http://localhost/api/chat", {
+    method: "POST",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ query: "List all equipment with serial numbers" }),
+  }),
+  environment,
+  context,
+);
+assert.equal(equipmentChatResponse.status, 200);
+const equipmentChat = await equipmentChatResponse.json();
+assert.match(equipmentChat.result, /Serial numbers for 26 equipment records/i);
+assert.match(equipmentChat.result, /SONIAL VISION G4/i);
 
 const writeResponse = await worker.fetch(
   new Request("http://localhost/api/hospitals", {
@@ -70,6 +85,32 @@ const equipmentWriteResponse = await worker.fetch(
 );
 assert.equal(equipmentWriteResponse.status, 503);
 
+const equipmentDeleteResponse = await worker.fetch(
+  new Request("http://localhost/api/equipment", {
+    method: "DELETE",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ id: 1 }),
+  }),
+  environment,
+  context,
+);
+assert.equal(equipmentDeleteResponse.status, 503);
+
+const agreementWriteResponse = await worker.fetch(
+  new Request("http://localhost/api/agreements", {
+    method: "PATCH",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({
+      id: 1,
+      agreement_start_date: "2026-01-01",
+      agreement_end_date: "2026-12-31",
+    }),
+  }),
+  environment,
+  context,
+);
+assert.equal(agreementWriteResponse.status, 503);
+
 console.log(JSON.stringify({
   data: dataResponse.status,
   source: data.source,
@@ -80,4 +121,6 @@ console.log(JSON.stringify({
   assistant: chatResponse.status,
   protectedWriteWithoutLiveBackend: writeResponse.status,
   protectedEquipmentWriteWithoutLiveBackend: equipmentWriteResponse.status,
+  protectedEquipmentDeleteWithoutLiveBackend: equipmentDeleteResponse.status,
+  protectedAgreementWriteWithoutLiveBackend: agreementWriteResponse.status,
 }));

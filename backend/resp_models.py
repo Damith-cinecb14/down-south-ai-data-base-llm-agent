@@ -93,6 +93,11 @@ class ServiceAgreementResponse(BaseModel):
         from_attributes = True
 
 
+class ServiceAgreementUpdate(BaseModel):
+    agreement_start_date: Optional[date] = None
+    agreement_end_date: Optional[date] = None
+
+
 
 class AgentQueryRequest(BaseModel):
     query:str

@@ -44,6 +44,12 @@ class ServiceRepository:
        result = await self.db.execute(query.offset(skip).limit(limit))
        return list(result.scalars().all())
 
+    async def has_for_equipment(self, equipment_id: int) -> bool:
+       result = await self.db.execute(
+           select(Services.id).where(Services.equipment_id == equipment_id).limit(1)
+       )
+       return result.scalar_one_or_none() is not None
+
 
 
 
